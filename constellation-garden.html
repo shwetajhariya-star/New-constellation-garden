@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Constellation Garden</title>
+<meta name="description" content="An interactive, accessible night sky where drifting stars connect into constellations. Plant stars with a click or the keyboard.">
+<style>
+  :root {
+    --sky: #070b1c;
+    --ink: #e6ecff;
+    --muted: #9aa6cc;
+    --accent: #ffe9a8;
+    --surface: rgba(255,255,255,0.06);
+    --border: rgba(255,255,255,0.16);
+    --focus: #8fb4ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #04060f; color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 24px 16px 40px; }
+  header h1 { font-size: 22px; font-weight: 500; margin: 0 0 4px; letter-spacing: 0.2px; }
+  header p { font-size: 14px; color: var(--muted); margin: 0 0 18px; line-height: 1.6; }
+  .bar { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    flex-wrap: wrap; margin-bottom: 10px; }
+  .meta { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+  .count { font-size: 12px; color: var(--muted); }
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; }
+  button { font: inherit; font-size: 13px; color: var(--ink); background: var(--surface);
+    border: 1px solid var(--border); border-radius: 8px; padding: 7px 13px; cursor: pointer;
+    transition: background 0.15s, transform 0.05s; }
+  button:hover { background: rgba(255,255,255,0.12); }
+  button:active { transform: scale(0.97); }
+  button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+  canvas { display: block; width: 100%; height: 440px; border-radius: 12px;
+    background: var(--sky); cursor: crosshair; outline-offset: 3px; touch-action: none; }
+  canvas:focus-visible { outline: 3px solid var(--focus); }
+  .hint { font-size: 12px; color: var(--muted); margin: 10px 0 0; line-height: 1.6; }
+  .hint kbd { background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
+    padding: 1px 6px; font-size: 11px; font-family: ui-monospace, monospace; }
+  footer { font-size: 12px; color: var(--muted); margin-top: 20px; line-height: 1.6; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+  @media (prefers-reduced-motion: reduce) { button { transition: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Constellation garden</h1>
+    <p>A living night sky. Stars drift, twinkle, and link into constellations when they wander close. Plant your own with a click or the keyboard.</p>
+  </header>
+
+  <h2 class="sr-only">Interactive night sky. Plant a star by clicking, or move a keyboard cursor with the arrow keys and press Enter. A button pauses all motion.</h2>
+
+  <div class="bar">
+    <div class="meta">
+      <span>Constellation garden</span>
+      <span class="count" id="count">12 stars</span>
+    </div>
+    <div class="controls">
+      <button id="motion" aria-pressed="false">Pause motion</button>
+      <button id="seed">Scatter</button>
+      <button id="clear">Clear sky</button>
+    </div>
+  </div>
+
+  <canvas id="sky" tabindex="0" role="application"
+    aria-label="Night sky. Use arrow keys to move the cursor, Enter or space to plant a star, Delete to remove the nearest star, P to pause or resume motion."></canvas>
+
+  <div id="live" aria-live="polite" class="sr-only"></div>
+
+  <p class="hint">
+    Click to plant a star. Or focus the sky and use <kbd>↑ ↓ ← →</kbd> to move,
+    <kbd>Enter</kbd> to plant, <kbd>Delete</kbd> to remove the nearest, <kbd>P</kbd> to pause.
+    Hold <kbd>Shift</kbd> for bigger steps.
+  </p>
+
+  <footer>
+    Runs entirely in your browser — no accounts, no tracking, no internet needed. Free to share.
+  </footer>
+</div>
+
+<script>
+(function () {
+  const canvas = document.getElementById('sky');
+  const ctx = canvas.getContext('2d');
+  const countEl = document.getElementById('count');
+  const live = document.getElementById('live');
+  let W, H, dpr;
+  let mouse = { x: -999, y: -999 };
+
+  const prefersReduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let paused = prefersReduced;
+  let kbActive = false;
+  let kb = { x: 0, y: 0 };
+
+  function resize() {
+    dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    W = rect.width; H = rect.height;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (kb.x === 0 && kb.y === 0) { kb.x = W / 2; kb.y = H / 2; }
+  }
+
+  const palette = ['#dbe2ff', '#aebfff', '#ffe9a8', '#ffc9df', '#b3f2e4'];
+  let stars = [];
+
+  function makeStar(x, y) {
+    return {
+      x: x != null ? x : Math.random() * W,
+      y: y != null ? y : Math.random() * H,
+      vx: (Math.random() - 0.5) * 0.18,
+      vy: (Math.random() - 0.5) * 0.18,
+      r: 1.4 + Math.random() * 1.9,
+      phase: Math.random() * Math.PI * 2,
+      speed: 0.02 + Math.random() * 0.03,
+      color: palette[Math.floor(Math.random() * palette.length)],
+      born: 0
+    };
+  }
+
+  function seed(n) { for (let i = 0; i < n; i++) stars.push(makeStar()); updateCount(); }
+  function updateCount() { countEl.textContent = stars.length + ' star' + (stars.length === 1 ? '' : 's'); }
+  function announce(msg) { live.textContent = msg; }
+
+  let bg = [];
+  function makeBackdrop() {
+    bg = [];
+    for (let i = 0; i < 100; i++) bg.push({ x: Math.random(), y: Math.random(), r: Math.random() * 0.9 + 0.2, a: Math.random() * 0.55 + 0.12, ph: Math.random() * Math.PI * 2 });
+  }
+
+  const LINK = 96;
+  let t = 0;
+
+  function draw() {
+    if (!paused) t += 1;
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--sky').trim() || '#070b1c';
+    ctx.fillRect(0, 0, W, H);
+
+    for (const s of bg) {
+      const tw = paused ? 0.7 : 0.5 + 0.5 * Math.sin(t * 0.02 + s.ph);
+      ctx.globalAlpha = s.a * tw;
+      ctx.fillStyle = '#e6ecff';
+      ctx.beginPath(); ctx.arc(s.x * W, s.y * H, s.r, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    if (!paused) {
+      for (const s of stars) {
+        s.x += s.vx; s.y += s.vy;
+        if (s.x < 0 || s.x > W) s.vx *= -1;
+        if (s.y < 0 || s.y > H) s.vy *= -1;
+        s.x = Math.max(0, Math.min(W, s.x));
+        s.y = Math.max(0, Math.min(H, s.y));
+        const dxm = s.x - mouse.x, dym = s.y - mouse.y, dm = Math.hypot(dxm, dym);
+        if (dm < 72 && dm > 0.1) { s.vx += (dxm / dm) * 0.012; s.vy += (dym / dm) * 0.012; }
+        s.vx *= 0.995; s.vy *= 0.995;
+      }
+    }
+    for (const s of stars) { if (s.born < 1) s.born = Math.min(1, s.born + (paused ? 0.12 : 0.04)); }
+
+    for (let i = 0; i < stars.length; i++) {
+      for (let j = i + 1; j < stars.length; j++) {
+        const a = stars[i], b = stars[j], d = Math.hypot(a.x - b.x, a.y - b.y);
+        if (d < LINK) {
+          const alpha = (1 - d / LINK) * 0.6 * Math.min(a.born, b.born);
+          ctx.strokeStyle = 'rgba(190,205,255,' + alpha.toFixed(3) + ')';
+          ctx.lineWidth = 0.7;
+          ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+        }
+      }
+    }
+
+    for (const s of stars) {
+      const tw = paused ? 1 : 0.65 + 0.35 * Math.sin(t * s.speed + s.phase);
+      const r = s.r * s.born;
+      ctx.globalAlpha = tw * s.born;
+      ctx.fillStyle = s.color;
+      ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = tw * 0.2 * s.born;
+      ctx.beginPath(); ctx.arc(s.x, s.y, r * 3.2, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    if (kbActive) {
+      ctx.strokeStyle = '#ffe9a8';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(kb.x, kb.y, 11, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(kb.x - 16, kb.y); ctx.lineTo(kb.x - 6, kb.y);
+      ctx.moveTo(kb.x + 6, kb.y); ctx.lineTo(kb.x + 16, kb.y);
+      ctx.moveTo(kb.x, kb.y - 16); ctx.lineTo(kb.x, kb.y - 6);
+      ctx.moveTo(kb.x, kb.y + 6); ctx.lineTo(kb.x, kb.y + 16); ctx.stroke();
+    }
+    requestAnimationFrame(draw);
+  }
+
+  canvas.addEventListener('mousemove', e => {
+    const rect = canvas.getBoundingClientRect();
+    mouse.x = e.clientX - rect.left; mouse.y = e.clientY - rect.top;
+  });
+  canvas.addEventListener('mouseleave', () => { mouse.x = -999; mouse.y = -999; });
+  canvas.addEventListener('click', e => {
+    const rect = canvas.getBoundingClientRect();
+    const s = makeStar(e.clientX - rect.left, e.clientY - rect.top); s.born = 0; stars.push(s);
+    updateCount(); announce('Star planted. ' + stars.length + ' stars in the sky.');
+  });
+  canvas.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'touch') {
+      const rect = canvas.getBoundingClientRect();
+      const s = makeStar(e.clientX - rect.left, e.clientY - rect.top); s.born = 0; stars.push(s);
+      updateCount(); announce('Star planted. ' + stars.length + ' stars.');
+    }
+  });
+
+  canvas.addEventListener('focus', () => { kbActive = true; announce('Sky focused. Arrow keys move the cursor, Enter plants a star.'); });
+  canvas.addEventListener('blur', () => { kbActive = false; });
+
+  function nearestStar(x, y) {
+    let best = null, bd = Infinity;
+    for (const s of stars) { const d = Math.hypot(s.x - x, s.y - y); if (d < bd) { bd = d; best = s; } }
+    return { best: best, bd: bd };
+  }
+
+  canvas.addEventListener('keydown', e => {
+    const step = e.shiftKey ? 40 : 16;
+    let handled = true;
+    switch (e.key) {
+      case 'ArrowLeft': kb.x = Math.max(0, kb.x - step); break;
+      case 'ArrowRight': kb.x = Math.min(W, kb.x + step); break;
+      case 'ArrowUp': kb.y = Math.max(0, kb.y - step); break;
+      case 'ArrowDown': kb.y = Math.min(H, kb.y + step); break;
+      case 'Enter': case ' ': {
+        const s = makeStar(kb.x, kb.y); s.born = 0; stars.push(s);
+        updateCount(); announce('Star planted at cursor. ' + stars.length + ' stars.'); break;
+      }
+      case 'Delete': case 'Backspace': {
+        const r = nearestStar(kb.x, kb.y);
+        if (r.best && r.bd < 60) { stars.splice(stars.indexOf(r.best), 1); updateCount(); announce('Removed the nearest star. ' + stars.length + ' left.'); }
+        else announce('No star near the cursor to remove.');
+        break;
+      }
+      case 'p': case 'P': toggleMotion(); break;
+      default: handled = false;
+    }
+    if (handled) e.preventDefault();
+  });
+
+  function toggleMotion() {
+    paused = !paused;
+    const btn = document.getElementById('motion');
+    btn.setAttribute('aria-pressed', String(paused));
+    btn.textContent = paused ? 'Resume motion' : 'Pause motion';
+    announce(paused ? 'Motion paused. The sky is still.' : 'Motion resumed.');
+  }
+
+  document.getElementById('motion').addEventListener('click', toggleMotion);
+  document.getElementById('seed').addEventListener('click', () => { seed(6); announce('Scattered six new stars. ' + stars.length + ' total.'); });
+  document.getElementById('clear').addEventListener('click', () => { stars = []; updateCount(); announce('Sky cleared. No stars remain.'); });
+
+  function init() {
+    resize(); makeBackdrop(); stars = []; seed(12); draw();
+    if (prefersReduced) {
+      const btn = document.getElementById('motion');
+      btn.setAttribute('aria-pressed', 'true');
+      btn.textContent = 'Resume motion';
+      announce('Reduced motion is on by default. The sky is still. Press P or the resume button to animate.');
+    }
+  }
+  window.addEventListener('resize', () => { resize(); makeBackdrop(); });
+  init();
+})();
+</script>
+</body>
+</html>
